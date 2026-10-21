@@ -1,0 +1,88 @@
+# ════════════════════════════════════════════════════════════════
+#  Portfolio — single .gitignore for frontend (React/Vite) + backend (FastAPI)
+# ════════════════════════════════════════════════════════════════
+
+# ── Secrets & environment ───────────────────────────────────────
+# Real env files hold JWT secrets and admin passwords. Only the *.example files are committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# ── Databases ───────────────────────────────────────────────────
+# Created on first run and seeded automatically; contains admin hashes and visitor messages.
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ── User uploads (managed from the admin) ───────────────────────
+# Keep the folder, the default résumé and the seeded Creatio certificate; ignore everything else.
+backend/uploads/*
+!backend/uploads/.gitkeep
+!backend/uploads/resume.pdf
+!backend/uploads/certificates/
+backend/uploads/certificates/*
+!backend/uploads/certificates/creatio-developer-advanced.pdf
+*.tmp
+
+# Source copy of the résumé (already lives in backend/uploads/resume.pdf)
+/Jayesh_Sharma_Fullstack_AdlerQA*.pdf
+
+# ── Python ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+.eggs/
+build/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.ipynb_checkpoints/
+
+# ── Node / Vite ─────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+.eslintcache
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ── Logs & runtime ──────────────────────────────────────────────
+logs/
+*.log
+*.pid
+nohup.out
+
+# ── Editors & OS ────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.AppleDouble
+Thumbs.db
+desktop.ini
