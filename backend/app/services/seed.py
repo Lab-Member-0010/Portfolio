@@ -78,7 +78,7 @@ CERTIFICATIONS = [
         "kind": "certification", "title": "Creatio Software Developer — Advanced", "issuer": "Creatio",
         "issued": "Oct 2026", "credential_id": "00058468",
         "summary": "Advanced-level developer certification for building and customising applications on the Creatio low-code platform.",
-        "file_name": "creatio-developer-advanced.pdf",
+        "file_name": "certificates/creatio-developer-advanced.pdf",
     },
     {
         "kind": "certification", "title": "AWS Certified Cloud Practitioner", "issuer": "Amazon Web Services",

@@ -11,7 +11,8 @@ from app.schemas.content import (
     CertificationIn, CertificationOut, FactIn, FactOut, LifeCardIn, LifeCardOut, ProjectIn, ProjectOut,
     ReorderRequest, SkillIn, SkillOut, TimelineIn, TimelineOut,
 )
-from app.services.files import certificates_dir, read_pdf_upload, safe_name
+from app.services.files import certificate_key, read_pdf_upload
+from app.services.storage import get_storage, storage_for
 from app.services.sections import SECTION_KEYS, get_section, save_section
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
@@ -98,7 +99,7 @@ register_collection("life-cards", LifeCard, LifeCardIn, LifeCardOut)
 
 def _remove_cert_file(cert: Certification) -> None:
     if cert.file_name:
-        (certificates_dir() / cert.file_name).unlink(missing_ok=True)
+        storage_for(cert.file_name).delete(cert.file_name)
 
 
 register_collection("certifications", Certification, CertificationIn, CertificationOut, on_delete=_remove_cert_file)
@@ -110,9 +111,10 @@ async def upload_certificate_file(item_id: int, db: DB, file: UploadFile = File(
     if cert is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "certifications item not found")
     data = await read_pdf_upload(file)
-    _remove_cert_file(cert)
-    cert.file_name = safe_name(cert.id, cert.title)
-    (certificates_dir() / cert.file_name).write_bytes(data)
+    new_ref = get_storage().save(certificate_key(cert.id, cert.title), data)
+    if cert.file_name and cert.file_name != new_ref:
+        _remove_cert_file(cert)
+    cert.file_name = new_ref
     db.commit()
     db.refresh(cert)
     return cert

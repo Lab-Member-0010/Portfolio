@@ -20,6 +20,19 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     frontend_dist: str = "../frontend/dist"
     max_resume_mb: int = 10
+    # Vercel Blob: set automatically when a Blob store is connected to the project.
+    blob_read_write_token: str = ""
+    # Vercel sets VERCEL=1 at runtime; used to trust its x-forwarded-for header.
+    vercel: str = ""
+    trust_proxy_headers: bool = False
+
+    @property
+    def on_vercel(self) -> bool:
+        return bool(self.vercel)
+
+    @property
+    def use_blob_storage(self) -> bool:
+        return bool(self.blob_read_write_token)
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -32,7 +45,10 @@ class Settings(BaseSettings):
     @property
     def upload_path(self) -> Path:
         path = self._resolve(self.upload_dir)
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:  # read-only filesystem (e.g. serverless) — reads still work
+            pass
         return path
 
     @property
@@ -42,10 +58,15 @@ class Settings(BaseSettings):
     @property
     def resolved_database_url(self) -> str:
         # make relative sqlite paths relative to backend/ rather than CWD
+        url = self.database_url.strip()
         prefix = "sqlite:///./"
-        if self.database_url.startswith(prefix):
-            return f"sqlite:///{BASE_DIR / self.database_url[len(prefix):]}"
-        return self.database_url
+        if url.startswith(prefix):
+            return f"sqlite:///{BASE_DIR / url[len(prefix):]}"
+        # Neon/Vercel hand out postgres:// or postgresql:// — use the psycopg 3 driver.
+        for scheme in ("postgres://", "postgresql://"):
+            if url.startswith(scheme):
+                return "postgresql+psycopg://" + url[len(scheme):]
+        return url
 
 
 @lru_cache

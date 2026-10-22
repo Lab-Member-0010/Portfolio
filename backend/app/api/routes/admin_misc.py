@@ -5,7 +5,7 @@ from app.api.deps import DB, get_current_admin
 from app.services.files import read_pdf_upload
 from app.models import Certification, Message, Project, Skill
 from app.schemas.message import MessageOut, MessageUpdate
-from app.services.resume import resume_info, resume_path
+from app.services import resume as resume_svc
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
 
@@ -18,7 +18,7 @@ def stats(db: DB):
         "certifications": db.scalar(select(func.count(Certification.id))),
         "messages": db.scalar(select(func.count(Message.id))),
         "unread_messages": db.scalar(select(func.count(Message.id)).where(Message.is_read.is_(False))),
-        "resume": resume_info(),
+        "resume": resume_svc.resume_info(db),
     }
 
 
@@ -53,19 +53,16 @@ def delete_message(message_id: int, db: DB):
 
 # ---- Résumé -------------------------------------------------------------------
 @router.get("/resume")
-def get_resume_info():
-    return resume_info()
+def get_resume_info(db: DB):
+    return resume_svc.resume_info(db)
 
 
 @router.post("/resume")
-async def upload_resume(file: UploadFile = File(...)):
+async def upload_resume(db: DB, file: UploadFile = File(...)):
     data = await read_pdf_upload(file)
-    tmp = resume_path().with_suffix(".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(resume_path())
-    return resume_info()
+    return resume_svc.save_resume(db, data)
 
 
 @router.delete("/resume", status_code=204)
-def delete_resume():
-    resume_path().unlink(missing_ok=True)
+def delete_resume(db: DB):
+    resume_svc.delete_resume(db)

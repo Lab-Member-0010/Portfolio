@@ -1,31 +1,33 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import inspect
+from starlette.concurrency import run_in_threadpool
 
 from app.api.routes import admin_content, admin_misc, auth, public
 from app.core.config import get_settings
-from app.db.session import Base, SessionLocal, engine
-from app.services.migrations import run_migrations
-from app.services.seed import seed
+from app.services.bootstrap import ensure_initialized
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    fresh_install = not inspect(engine).has_table("admin_users")
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        seed(db)
-        run_migrations(db, fresh_install)
+    await run_in_threadpool(ensure_initialized)
     yield
 
 
 app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def lazy_init(request: Request, call_next):
+    # Serverless runtimes don't always send lifespan events; make sure the DB is ready.
+    if request.url.path.startswith("/api") and request.url.path != "/api/health":
+        await run_in_threadpool(ensure_initialized)
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,

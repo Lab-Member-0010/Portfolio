@@ -80,7 +80,8 @@ class Certification(OrderedMixin, Base):
     credential_id: Mapped[str] = mapped_column(String(80), default="")
     summary: Mapped[str] = mapped_column(Text, default="")
     link: Mapped[str] = mapped_column(String(500), default="")
-    file_name: Mapped[str] = mapped_column(String(200), default="")  # stored under uploads/certificates/
+    # storage reference: a path under uploads/ (local) or a Vercel Blob URL
+    file_name: Mapped[str] = mapped_column(String(500), default="")
 
 
 class AppMeta(Base):
@@ -89,4 +90,4 @@ class AppMeta(Base):
     __tablename__ = "app_meta"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[str] = mapped_column(String(200), default="")
+    value: Mapped[str] = mapped_column(Text, default="")

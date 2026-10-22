@@ -9,7 +9,7 @@ from collections.abc import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AppMeta, Fact, SiteSection, Skill
+from app.models import AppMeta, Certification, Fact, SiteSection, Skill
 
 VERSION_KEY = "content_version"
 
@@ -50,8 +50,17 @@ def _v2_experience_and_credentials(db: Session) -> None:
         skill.items = "Auth · billing · observability · third-party APIs · Creatio low-code platform · cross-platform services"
 
 
+def _v3_storage_refs(db: Session) -> None:
+    """Certificate files are now referenced by their path under uploads/ (or a Blob URL)."""
+    for cert in db.scalars(select(Certification).where(Certification.file_name != "")).all():
+        name = cert.file_name
+        if "/" not in name and not name.startswith("http"):
+            cert.file_name = f"certificates/{name}"
+
+
 MIGRATIONS: list[tuple[int, Callable[[Session], None]]] = [
     (2, _v2_experience_and_credentials),
+    (3, _v3_storage_refs),
 ]
 LATEST = max(v for v, _ in MIGRATIONS)
 

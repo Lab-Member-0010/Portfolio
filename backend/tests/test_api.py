@@ -2,7 +2,10 @@ import os
 import tempfile
 
 _tmp = tempfile.mkdtemp()
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
+# Run against Postgres with: TEST_DATABASE_URL=postgresql://user@host:5432/db pytest
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", f"sqlite:///{_tmp}/test.db")
+os.environ.pop("BLOB_READ_WRITE_TOKEN", None)
+os.environ.pop("VERCEL", None)
 os.environ["UPLOAD_DIR"] = _tmp
 os.environ["ADMIN_EMAIL"] = "admin@test.dev"
 os.environ["ADMIN_PASSWORD"] = "secret-pass-1"
@@ -122,4 +125,102 @@ def test_migration_updates_old_defaults(client):
         exp = db.get(SiteSection, "experience").data
         assert exp["period"] == "May 2025 — Present" and exp["years"] == "1.5" and exp["company"] == "Custom Co"
         assert db.query(Fact).filter_by(label="Years in the arena").count() == 0
-        assert db.get(AppMeta, "content_version").value == "2"
+        from app.services.migrations import LATEST
+        assert db.get(AppMeta, "content_version").value == str(LATEST)
+
+
+def test_database_url_normalisation():
+    from app.core.config import Settings
+
+    neon = "postgresql://u:p@ep-x-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+    assert Settings(database_url=neon).resolved_database_url.startswith("postgresql+psycopg://u:p@ep-x-pooler")
+    assert Settings(database_url="postgres://u:p@h/db").resolved_database_url == "postgresql+psycopg://u:p@h/db"
+    assert Settings(database_url="postgresql+psycopg://u:p@h/db").resolved_database_url == "postgresql+psycopg://u:p@h/db"
+
+
+def test_message_rate_limit_per_forwarded_ip(client):
+    from app.core.config import get_settings
+
+    s = get_settings()
+    s.trust_proxy_headers = True
+    try:
+        msg = {"name": "Bot", "email": "bot@x.io", "body": "hello there"}
+        for _ in range(5):
+            assert client.post("/api/messages", json=msg, headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"}).status_code == 201
+        assert client.post("/api/messages", json=msg, headers={"x-forwarded-for": "203.0.113.7"}).status_code == 429
+        # a different visitor behind the same proxy is unaffected
+        assert client.post("/api/messages", json=msg, headers={"x-forwarded-for": "198.51.100.9"}).status_code == 201
+    finally:
+        s.trust_proxy_headers = False
+
+
+def test_login_throttle(client):
+    from app.core.config import get_settings
+
+    s = get_settings()
+    s.trust_proxy_headers = True
+    ip = {"x-forwarded-for": "192.0.2.55"}
+    try:
+        for _ in range(10):
+            r = client.post("/api/auth/login", json={"email": "admin@test.dev", "password": "wrong"}, headers=ip)
+            assert r.status_code == 401
+        r = client.post("/api/auth/login", json={"email": "admin@test.dev", "password": "secret-pass-1"}, headers=ip)
+        assert r.status_code == 429
+        other = client.post("/api/auth/login", json={"email": "admin@test.dev", "password": "secret-pass-1"},
+                            headers={"x-forwarded-for": "192.0.2.56"})
+        assert other.status_code == 200
+    finally:
+        s.trust_proxy_headers = False
+
+
+def test_blob_storage_flow(client, auth):
+    """Uploads go to Vercel Blob (mocked) and public links redirect to the blob URL."""
+    import json as _json
+
+    import httpx
+
+    from app.services.storage import BlobStorage, set_storage
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "PUT":
+            path = request.url.params["pathname"]
+            return httpx.Response(200, json={
+                "url": f"https://storeabc.public.blob.vercel-storage.com/{path[:-4]}-RaNd.pdf",
+                "pathname": path,
+            })
+        if request.url.path.endswith("/delete"):
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    set_storage(BlobStorage("vercel_blob_rw_storeabc_secret", transport=httpx.MockTransport(handler)))
+    try:
+        cid = client.get("/api/admin/certifications", headers=auth).json()[1]["id"]
+        r = client.post(f"/api/admin/certifications/{cid}/file",
+                        files={"file": ("c.pdf", b"%PDF-1.4 blob", "application/pdf")}, headers=auth)
+        assert r.status_code == 200 and r.json()["has_file"]
+        put = calls[-1]
+        assert put.method == "PUT" and put.url.host == "vercel.com" and put.url.path == "/api/blob/"
+        assert put.url.params["pathname"].startswith(f"certificates/{cid}-")
+        assert put.headers["authorization"] == "Bearer vercel_blob_rw_storeabc_secret"
+        assert put.headers["x-vercel-blob-store-id"] == "storeabc"
+        assert put.headers["x-vercel-blob-access"] == "public"
+        assert put.content == b"%PDF-1.4 blob"
+
+        redirect = client.get(f"/api/certifications/{cid}/file", follow_redirects=False)
+        assert redirect.status_code == 307
+        assert redirect.headers["location"].startswith("https://storeabc.public.blob.vercel-storage.com/certificates/")
+
+        r = client.post("/api/admin/resume", files={"file": ("r.pdf", b"%PDF-1.4 cv", "application/pdf")}, headers=auth)
+        assert r.json()["available"] is True
+        dl = client.get("/api/resume", follow_redirects=False)
+        assert dl.status_code == 307 and dl.headers["location"].endswith("?download=1")
+
+        old_url = redirect.headers["location"]
+        assert client.delete(f"/api/admin/certifications/{cid}/file", headers=auth).json()["has_file"] is False
+        deleted = [c for c in calls if c.url.path.endswith("/delete")]
+        assert _json.loads(deleted[-1].content) == {"urls": [old_url]}
+    finally:
+        set_storage(None)

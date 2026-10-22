@@ -11,6 +11,8 @@
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-async-0b0c0c?style=for-the-badge&logo=fastapi&logoColor=c8ff2e" />
   <img alt="SQLAlchemy" src="https://img.shields.io/badge/SQLAlchemy-2.0-0b0c0c?style=for-the-badge&logo=sqlalchemy&logoColor=c8ff2e" />
   <img alt="JWT" src="https://img.shields.io/badge/Auth-JWT-0b0c0c?style=for-the-badge&logo=jsonwebtokens&logoColor=c8ff2e" />
+  <img alt="Vercel" src="https://img.shields.io/badge/Deploy-Vercel-0b0c0c?style=for-the-badge&logo=vercel&logoColor=c8ff2e" />
+  <img alt="Neon" src="https://img.shields.io/badge/DB-Neon_Postgres-0b0c0c?style=for-the-badge&logo=postgresql&logoColor=c8ff2e" />
 </p>
 
 <p>
@@ -164,8 +166,8 @@ flowchart LR
     AD -->|Bearer JWT| API
     subgraph BE["backend · FastAPI"]
         API[Routers] --> S[Services]
-        S --> DB[(SQLite / Postgres)]
-        S --> F[/uploads · PDFs/]
+        S --> DB[(SQLite / Neon Postgres)]
+        S --> F[/PDFs · disk or Vercel Blob/]
     end
 ```
 
@@ -269,8 +271,10 @@ Portfolio/
 │   │   ├── db/session.py             engine · session · Base
 │   │   ├── models/                   SQLAlchemy tables
 │   │   ├── schemas/                  Pydantic request/response models
-│   │   ├── services/                 defaults · seed · migrations · file helpers
+│   │   ├── services/                 defaults · seed · migrations · storage (disk / Vercel Blob) · rate limits
+│   │   ├── cli.py                    python -m app.cli init | check
 │   │   └── api/routes/               public · auth · admin_content · admin_misc
+│   ├── api/index.py                  Vercel entrypoint (+ vercel.json)
 │   ├── tests/test_api.py             pytest, end-to-end through the API
 │   ├── uploads/                      résumé + certificate PDFs
 │   └── requirements.txt
@@ -379,27 +383,30 @@ Full interactive docs live at **`/docs`** once the backend is running.
 ## ⚙️ Configuration
 
 <details open>
-<summary><b><code>backend/.env</code></b></summary>
+<summary><b><code>backend/.env</code></b> (local) · Vercel → backend project → Environment Variables (production)</summary>
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | `sqlite:///./portfolio.db` | Any SQLAlchemy URL — e.g. `postgresql+psycopg://user:pass@host/db` |
+| `DATABASE_URL` | `sqlite:///./portfolio.db` | SQLite locally · Neon **pooled** URL in production (`postgres://` / `postgresql://` accepted as-is) |
 | `JWT_SECRET` | `change-me…` | **Change this.** Signs admin tokens |
 | `JWT_EXPIRE_MINUTES` | `720` | Admin session length |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@example.com` / `ChangeMe123!` | First admin user (created once) |
-| `CORS_ORIGINS` | `http://localhost:5173,…` | Comma-separated allowed origins |
-| `UPLOAD_DIR` | `./uploads` | Where PDFs are stored |
-| `FRONTEND_DIST` | `../frontend/dist` | Built React app to serve in production |
+| `CORS_ORIGINS` | `http://localhost:5173,…` | Comma-separated, exact frontend origins |
+| `MAX_RESUME_MB` | `10` | PDF upload limit — use `4` on Vercel |
+| `BLOB_READ_WRITE_TOKEN` | *(unset)* | Added by Vercel when a Blob store is connected → PDFs stored in Vercel Blob |
+| `UPLOAD_DIR` | `./uploads` | Local PDF storage (when Blob isn't configured) |
+| `FRONTEND_DIST` | `../frontend/dist` | Built React app to serve from FastAPI (single-server mode) |
+| `TRUST_PROXY_HEADERS` | `false` | Read visitor IPs from `X-Forwarded-For` (automatic on Vercel) |
 
 </details>
 
 <details>
-<summary><b><code>frontend/.env</code></b></summary>
+<summary><b><code>frontend/.env</code></b> · Vercel → frontend project → Environment Variables</summary>
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VITE_API_URL` | *(empty)* | Leave empty for same-origin `/api`; set when the API is on another domain |
-| `VITE_PROXY_TARGET` | `http://127.0.0.1:8000` | Where the dev server proxies `/api` |
+| `VITE_API_URL` | *(empty)* | Backend URL **without** `/api` — e.g. `https://my-api.vercel.app`. Empty = same origin |
+| `VITE_PROXY_TARGET` | `http://127.0.0.1:8000` | Dev server only: where `/api` is proxied |
 
 </details>
 
@@ -407,12 +414,56 @@ Full interactive docs live at **`/docs`** once the backend is running.
 
 ## 🚀 Deploying
 
-**One server, one process** — FastAPI serves the API *and* the built site (with SPA fallback for `/admin/*`):
+### ▲ Vercel (free, no card) — recommended
+
+```mermaid
+flowchart LR
+    U([Visitor]) --> FE["▲ Vercel<br/>frontend project<br/><i>React build</i>"]
+    FE -->|"VITE_API_URL"| BE["▲ Vercel<br/>backend project<br/><i>FastAPI function</i>"]
+    BE --> N[("Neon<br/>Postgres")]
+    BE --> B[/"Vercel Blob<br/>PDFs"/]
+```
+
+Two Vercel projects from this one repo:
+
+| | Backend project | Frontend project |
+| --- | --- | --- |
+| **Root Directory** | `backend` | `frontend` |
+| **Framework Preset** | Other | Vite (auto) |
+| **Config** | `backend/vercel.json` → all routes to `api/index.py` | `frontend/vercel.json` → SPA fallback for `/admin/*` |
+| **Storage** | Neon (`DATABASE_URL`) + Blob (`BLOB_READ_WRITE_TOKEN`) | — |
+| **Env vars** | `DATABASE_URL` `JWT_SECRET` `ADMIN_EMAIL` `ADMIN_PASSWORD` `CORS_ORIGINS` `MAX_RESUME_MB=4` | `VITE_API_URL` |
+
+<details>
+<summary><b>📋 Step by step</b></summary>
+
+1. **Neon** — create a project, copy the **pooled** connection string.
+2. **Vercel → Storage → Blob** — create a public store.
+3. **Backend project** — *Add New → Project*, import the repo, Root Directory `backend`, add the env vars, **Deploy**.
+4. **Blob store → Connect to Project** → pick the backend project, then **Redeploy** it.
+5. Open `https://<backend>.vercel.app/api/health` → `{"status":"ok"}`.
+6. **Frontend project** — import the same repo again, Root Directory `frontend`, set `VITE_API_URL=https://<backend>.vercel.app`, **Deploy**.
+7. Set the backend's `CORS_ORIGINS=https://<frontend>.vercel.app` and redeploy the backend.
+8. Visit `/admin` on the frontend, sign in, change the password.
+
+The first request creates the tables, seeds the content and uploads the bundled PDFs to Blob.
+To do it ahead of time from your machine:
+
+```bash
+cd backend
+DATABASE_URL="postgresql://…" BLOB_READ_WRITE_TOKEN="vercel_blob_rw_…" python -m app.cli init
+```
+
+</details>
+
+### 🖥️ Single server (VPS)
+
+FastAPI serves the API *and* the built site (with SPA fallback for `/admin/*`):
 
 ```bash
 cd frontend && npm ci && npm run build      # → frontend/dist
 cd ../backend && pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --proxy-headers
 ```
 
 <details>
@@ -436,28 +487,14 @@ server {
 </details>
 
 <details>
-<summary><b>🐘 Switching to PostgreSQL</b></summary>
-
-```bash
-pip install "psycopg[binary]"
-# backend/.env
-DATABASE_URL=postgresql+psycopg://portfolio:secret@localhost:5432/portfolio
-```
-
-Tables are created and seeded automatically on the next start.
-
-</details>
-
-<details>
 <summary><b>✅ Pre-launch checklist</b></summary>
 
-- [ ] Set a long random `JWT_SECRET`
+- [ ] Set a long random `JWT_SECRET` — `python3 -c "import secrets; print(secrets.token_urlsafe(64))"`
 - [ ] Change `ADMIN_EMAIL` / `ADMIN_PASSWORD` (or change the password in Admin → Account)
-- [ ] Set `CORS_ORIGINS` to your real domain
+- [ ] Set `CORS_ORIGINS` to your real frontend URL
 - [ ] Upload the latest résumé and certificate PDFs
 - [ ] Fill in email / LinkedIn / GitHub under Admin → Page copy → Site
-- [ ] Put HTTPS in front (nginx + certbot)
-- [ ] Back up `portfolio.db` and `backend/uploads/`
+- [ ] Add a free uptime monitor on `/api/health`
 
 </details>
 
@@ -467,7 +504,11 @@ Tables are created and seeded automatically on the next start.
 
 ```bash
 cd backend && source .venv/bin/activate
-pytest -q        # auth, CRUD, publish/hide, reorder, messages, uploads, migrations
+pip install -r requirements-dev.txt
+pytest -q        # auth, CRUD, publish/hide, reorder, messages, uploads, Blob, rate limits, migrations
+
+# same suite against Postgres
+TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/portfolio_test pytest -q
 ```
 
 ```bash
@@ -482,7 +523,9 @@ npx tsc -b && npm run build     # type-check + production build
 - Passwords hashed with **bcrypt**; admin routes require a signed **JWT**
 - Every request body validated by **Pydantic**; unknown section keys are dropped
 - Uploads must be real PDFs (magic-byte check) and are size-limited
-- Contact form: hidden **honeypot** field + **per-IP rate limit**
+- Contact form: hidden **honeypot** field + **per-visitor rate limit** (5 / 10 min)
+- Admin login: locked for 15 min after 10 failed attempts from the same IP
+- Rate limits live in the database, so they hold across serverless instances
 - `.env`, databases and uploaded files are git-ignored
 
 ---
